@@ -2,8 +2,9 @@
 // This is the core engine of our performance testing tool.
 
 const express = require('express');
+const path = require('path');
 
-const app = express();
+const app = express(); // Initialize Express app
 const PORT = 3001;
 
 // PageSpeed Lighthouse throttling profiles
@@ -32,15 +33,14 @@ const LIGHTHOUSE_THROTTLING = {
     }
 };
 
-// Middleware to serve our static frontend file and parse JSON bodies
-app.use(express.static('public'));
+// --- Middleware Configuration ---
+
+// 1. Middleware to parse JSON request bodies.
 app.use(express.json());
 
-// Health-check endpoint for the root path.
-// This now acts as a fallback for the root if `public/index.html` is not found.
-app.get('/', (req, res) => {
-    res.status(200).send('Performance Tester server is running! (No index.html found)');
-});
+// 2. Middleware to serve static files (HTML, CSS, JS) from the 'public' directory.
+// This is the crucial part that ensures requests for /js/main.js and /css/style.css are handled correctly.
+app.use(express.static(path.join(__dirname, 'public')));
 
 /**
  * Executes a single performance test run for a given URL.
@@ -98,27 +98,27 @@ async function runSingleTest(browser, { url, rules, mode, disableCache }) {
 
         console.log(`[DEBUG] Throttling applied - CPU: ${throttlingConfig.cpu}x, Network latency: ${throttlingConfig.network.latency}ms`);
 
-        // FCP promise setup
+        // FCP promise setup - this promise will be resolved by the observer script
         const fcpPromise = new Promise(resolve => {
-            page.exposeFunction('__reportFcp', fcp => {
-                console.log(`[SERVER]: __reportFcp called from browser with value: ${fcp}`);
-                resolve(fcp);
-            });
+            page.once('fcp-reported', resolve);
         });
 
         // Inject performance observers
-        await injectPerformanceObservers(page);
+        await injectPerformanceObservers(page); // This will now also expose the function
 
         // Enable request interception for rules
         await page.setRequestInterception(true);
-        setupRequestInterceptor(page, { url, rules, browser });
+        setupRequestInterceptor(page, { rules });
 
         // --- Metrics Collection ---
+        let fcpTimeoutId;
         const fcpMetricPromise = Promise.race([
-            fcpPromise,
-            new Promise(resolve => setTimeout(() => resolve(null), 30000)).then(v => {
-                console.log('[DEBUG] FCP promise timed out.');
-                return v;
+            fcpPromise.then(fcp => {
+                clearTimeout(fcpTimeoutId); // Clear the timeout since FCP was found
+                return fcp;
+            }),
+            new Promise(resolve => {
+                fcpTimeoutId = setTimeout(() => resolve(null), 30000);
             })
         ]);
 
@@ -141,8 +141,7 @@ async function runSingleTest(browser, { url, rules, mode, disableCache }) {
 // The main API endpoint for running a test
 app.post('/test', async (req, res) => {
     // LAZY REQUIRE: Load heavy modules only when the endpoint is called.
-    const puppeteer = require('puppeteer');
-    const axios = require('axios');
+    const puppeteer = require('puppeteer'); // axios is no longer needed
 
     const { url, rules, mode = 'custom', runs = 3, disableCache = false, dryRun = false } = req.body; // Add 'dryRun' parameter
 
@@ -170,7 +169,7 @@ app.post('/test', async (req, res) => {
             console.log('[DEBUG] Launching Puppeteer browser...');
             browser = await puppeteer.launch({
                 headless: true,
-                timeout: 30000,
+                timeout: 60000, // Increased timeout for browser launch
                 protocol: 'cdp',
                 args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
             });
@@ -178,8 +177,8 @@ app.post('/test', async (req, res) => {
 
             const allMetrics = [];
             for (let i = 0; i < runs; i++) {
-                console.log(`\n--- Starting run ${i + 1} of ${runs} ---`);
-                const metrics = await runSingleTest(browser, { url, rules, mode, disableCache });
+                console.log(`\n--- Starting run ${i + 1} of ${runs} for ${url} ---`);
+                const metrics = await runSingleTest(browser, { url, rules, mode, disableCache }); // axios is no longer passed
                 allMetrics.push(metrics);
                 console.log(`--- Finished run ${i + 1}: FCP=${metrics.FCP?.toFixed(2)}ms, LCP=${metrics.LCP?.toFixed(2)}ms ---`);
             }
@@ -255,12 +254,19 @@ app.post('/test', async (req, res) => {
  * @param {object} page - The Puppeteer page object.
  */
 async function injectPerformanceObservers(page) {
+    // Expose a function to the page that the observer can call.
+    // We re-expose it for every new page to ensure the binding is fresh.
+    await page.exposeFunction('__reportFcp', fcp => {
+        console.log(`[SERVER]: __reportFcp called from browser with value: ${fcp}`);
+        page.emit('fcp-reported', fcp); // Emit an event on the page object
+    });
+
     await page.evaluateOnNewDocument(() => {
         if (window.self !== window.top) {
             return; // Skip iframes
         }
         console.log('[PERF OBSERVER]: Script injected in main frame.');
-
+        
         // FCP Observer
         new PerformanceObserver((entryList) => {
             const entries = entryList.getEntries();
@@ -304,44 +310,67 @@ async function injectPerformanceObservers(page) {
  * @param {object} page - The Puppeteer page object.
  * @param {object} options - The test options.
  */
-function setupRequestInterceptor(page, { url, rules, browser }) {
-    const axios = require('axios');
+function setupRequestInterceptor(page, { rules }) {
     page.on('request', async (request) => {
         const requestUrl = request.url();
         const resourceType = request.resourceType();
 
+        // Rule: Block requests based on URL fragments
         if (rules.block && rules.block.some(fragment => requestUrl.includes(fragment))) {
             console.log('🚫 Blocking:', requestUrl);
             return request.abort();
         }
 
+        // Rule: Modify the main HTML document
         if (resourceType === 'document' && request.isNavigationRequest()) {
-            try {
-                const response = await axios.get(url, { headers: { 'User-Agent': await browser.userAgent() } });
-                let body = response.data;
+            // Let the original request go through to avoid CORS issues with server-side fetch
+            const response = await request.continue();
+            if (response && response.ok() && response.headers()['content-type']?.includes('text/html')) {
+                let body = await response.text();
+                let modified = false;
 
-                if (rules.defer && rules.defer.length > 0) {
-                    console.log('[HTML MOD]: Deferring scripts...');
-                    rules.defer.forEach(fragment => {
-                        const regex = new RegExp(`(<script[^>]*src="[^"]*${fragment}[^"]*"[^>]*)>`, 'gi');
+                // Apply defer rules
+                (rules.defer || []).forEach(fragment => {
+                    const regex = new RegExp(`(<script[^>]*src="[^"]*${fragment}[^"]*"[^>]*)>`, 'gi');
+                    if (regex.test(body)) {
                         body = body.replace(regex, '$1 defer>');
+                        modified = true;
+                        console.log(`[HTML MOD]: Deferred script matching "${fragment}"`);
+                    }
+                });
+
+                // Apply HTML replace rules
+                if (rules.html_replace?.find) {
+                    body = body.replace(new RegExp(rules.html_replace.find, 'g'), rules.html_replace.replace);
+                    modified = true;
+                    console.log('[HTML MOD]: Applied HTML content replacement.');
+                }
+
+                // Only respond with modified content if a change was made
+                if (modified) {
+                    return request.respond({
+                        status: response.status(),
+                        headers: response.headers(),
+                        body: body
                     });
                 }
-
-                if (rules.html_replace && rules.html_replace.find) {
-                    console.log('[HTML MOD]: Replacing HTML content...');
-                    body = body.replace(new RegExp(rules.html_replace.find, 'g'), rules.html_replace.replace);
-                }
-                return request.respond({ status: 200, contentType: 'text/html', body });
-            } catch (e) {
-                console.error('Error fetching/modifying document:', e.message);
-                return request.abort('failed');
             }
+            return; // No modifications needed or not an HTML document
         }
-        request.continue();
+
+        // Continue all other requests without modification
+        return request.continue();
     });
 }
 
-app.listen(PORT, 'localhost', () => {
+// --- Catch-all Route ---
+// This must come *after* your API routes and static middleware. It ensures that any
+// direct browser navigation to a non-asset path still loads the main application.
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// --- Server Initialization ---
+app.listen(PORT, () => {
     console.log(`🚀 Performance Tester server is running at http://localhost:${PORT}`);
 });

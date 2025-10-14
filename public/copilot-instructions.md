@@ -37,8 +37,6 @@ The project is composed of two main files:
 
 * This is the user interface.
 * It contains a form for the user to input the target URL and the JSON rules.
-* The `<textarea>` for rules is pre-populated with an example to guide the user.
-* The JavaScript logic is contained within a `<script>` tag at the bottom.
 * **Core Logic:**
     1.  On form submission, it prevents the default action.
     2.  It parses the JSON from the rules textarea. If parsing fails, it shows an error.
@@ -53,7 +51,8 @@ The project is composed of two main files:
 2.  Navigate to the project's root directory in a terminal.
 3.  Run `npm install` to install Express and Puppeteer.
 4.  Run `npm start` to start the server.
-5.  Open a web browser and go to `http://localhost:3000`.
+5.  Alternatively, run `npm run dev` to start the development server with `nodemon` for automatic restarts on file changes.
+6.  Open a web browser and go to `http://localhost:3000`.
 
 ## 5. Instructions for Assisting with This Project
 
@@ -63,6 +62,5 @@ The project is composed of two main files:
 * **Potential Improvements:** Good suggestions for future development would include:
     * Running a "control" test (no rules) alongside the "experiment" test and showing a side-by-side comparison.
     * Adding more metrics like Total Blocking Time (TBT) or Cumulative Layout Shift (CLS).
-    * Implementing network throttling (e.g., 'Slow 3G') using Puppeteer's `emulateNetworkConditions` method.
     * Adding more rule types, like modifying request headers or simulating minification.
 * **Keep it Simple:** The goal of this project is simplicity. Avoid suggestions that add significant complexity, like databases or user accounts, unless specifically asked.
