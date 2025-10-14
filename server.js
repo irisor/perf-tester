@@ -2,8 +2,6 @@
 // This is the core engine of our performance testing tool.
 
 const express = require('express');
-const axios = require('axios');
-const puppeteer = require('puppeteer');
 
 const app = express();
 const PORT = 3001;
@@ -38,11 +36,30 @@ const LIGHTHOUSE_THROTTLING = {
 app.use(express.static('public'));
 app.use(express.json());
 
+// Health-check endpoint for the root path.
+// This now acts as a fallback for the root if `public/index.html` is not found.
+app.get('/', (req, res) => {
+    res.status(200).send('Performance Tester server is running! (No index.html found)');
+});
+
 // The main API endpoint for running a test
 app.post('/test', async (req, res) => {
-    const { url, rules, mode = 'custom' } = req.body; // Add 'mode' parameter
+    // LAZY REQUIRE: Load heavy modules only when the endpoint is called.
+    const puppeteer = require('puppeteer');
+    const axios = require('axios');
+
+    const { url, rules, mode = 'custom', dryRun = false } = req.body; // Add 'dryRun' parameter
 
     // mode can be: 'custom', 'pagespeed-mobile', 'pagespeed-desktop'
+
+    // A true dry run to test the server without launching Puppeteer at all.
+    if (dryRun) {
+        console.log('✅ Performing a true dry run (skipping Puppeteer).');
+        return res.json({
+            message: 'Dry run successful. Server is responsive and Puppeteer was skipped.',
+            metrics: { FCP: -1, LCP: -1, mode: 'dry-run' }
+        });
+    }
 
     if (!url) {
         return res.status(400).json({ error: 'URL is required' });
@@ -51,14 +68,23 @@ app.post('/test', async (req, res) => {
     console.log(`Starting test for URL: ${url} in ${mode} mode`);
     console.log('With rules:', rules);
 
-    let browser;
+    let browser; // Define browser in the outer scope for the finally block
     try {
+        console.log('[DEBUG] Launching Puppeteer browser...');
         browser = await puppeteer.launch({
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            // Add a timeout for the entire browser launch and connection process
+            timeout: 30000,
+            // Force the use of the stable Chrome DevTools Protocol
+            protocol: 'cdp',
+            // Added '--disable-dev-shm-usage' for stability in resource-constrained environments like Cloud Shell
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
-        const page = await browser.newPage();
+        console.log('[DEBUG] Browser launched successfully.');
 
+        const testPromise = (async () => {
+
+        const page = await browser.newPage();
         page.on('console', msg => console.log(`[BROWSER]: ${msg.text()}`));
 
         // Apply PageSpeed settings if requested
@@ -97,7 +123,6 @@ app.post('/test', async (req, res) => {
         await client.send('Network.emulateNetworkConditions', throttlingConfig.network);
         await client.send('Emulation.setCPUThrottlingRate', { rate: throttlingConfig.cpu });
 
-        await client.send('Emulation.setCPUThrottlingRate', { rate: throttlingConfig.cpu });
         console.log(`[DEBUG] Throttling applied - CPU: ${throttlingConfig.cpu}x, Network latency: ${throttlingConfig.network.latency}ms`);
 
         // LCP promise setup
@@ -207,62 +232,36 @@ app.post('/test', async (req, res) => {
             request.continue();
         });
 
-        // Navigation and metrics collection
-        const navigationPromise = page.goto(url, { waitUntil: 'load', timeout: 60000 });
+        // --- Metrics Collection Refactored ---
 
+        // 1. Set up a race for FCP against a timeout.
         const fcpMetricPromise = Promise.race([
             fcpPromise,
-            new Promise(resolve => setTimeout(() => resolve(null), 30000))
+            new Promise(resolve => setTimeout(() => resolve(null), 30000)).then(v => {
+                console.log('[DEBUG] FCP promise timed out.');
+                return v;
+            })
         ]);
 
-        const lcpMetricPromise = Promise.race([
-            lcpPromise,
-            new Promise(resolve => setTimeout(() => resolve(null), 30000))
-        ]);
+        // 2. Start navigation. FCP will be captured while the page is loading.
+        await page.goto(url, { waitUntil: 'load', timeout: 60000 });
+        console.log('[DEBUG] Page "load" event fired.');
 
-        const interactionsPromise = (async () => {
-            await navigationPromise;
+        // 3. Wait for the page to settle down after the 'load' event.
+        // Using a fixed delay is more reliable than waitForNetworkIdle, which is deprecated in practice.
+        console.log('[DEBUG] Waiting 2 seconds for page to settle and LCP to finalize...');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        console.log('[DEBUG] Settling delay complete.');
 
-            // Wait a few seconds for content to render and LCP to update
-            await new Promise(resolve => setTimeout(resolve, 3000));
+        // 4. Now that the page is idle, collect FCP and LCP.
+        // FCP might have already resolved, but we await it here.
+        const fcp = await fcpMetricPromise;
 
-            // THEN wait for network idle
-            await page.waitForNetworkIdle({ idleTime: 500, timeout: 20000 });
+        // Retrieve the final LCP value from the browser.
+        const lcp = await page.evaluate(() => window.__getFinalLcp());
 
-            // Add this to your interactionsPromise, right before getting final LCP:
-            const lcpCandidates = await page.evaluate(() => {
-                const entries = performance.getEntriesByType('largest-contentful-paint');
-                return entries.map(e => ({
-                    startTime: e.startTime,
-                    size: e.size,
-                    element: e.element?.tagName,
-                    url: e.url || e.element?.currentSrc || 'N/A'
-                }));
-            });
-            console.log('[DEBUG] All LCP candidates:', JSON.stringify(lcpCandidates, null, 2));
-
-            // Get final LCP before any scrolling (PageSpeed doesn't scroll)
-            const finalLcp = await page.evaluate(() => window.__getFinalLcp());
-            resolveLcp(finalLcp);
-
-            // Optional: Only scroll in custom mode for your optimization tests
-            // if (mode === 'custom') {
-            //     await page.evaluate(() => {
-            //         return new Promise(resolve => {
-            //             let totalHeight = 0;
-            //             const distance = 100;
-            //             const timer = setInterval(() => {
-            //                 const scrollHeight = document.body.scrollHeight;
-            //                 window.scrollBy(0, distance);
-            //                 totalHeight += distance;
-            //                 if (totalHeight >= scrollHeight) { clearInterval(timer); resolve(); }
-            //             }, 100);
-            //         });
-            //     });
-            // }
-        })();
-
-        const [fcp, lcp] = await Promise.all([fcpMetricPromise, lcpMetricPromise, interactionsPromise]);
+        // We don't need the complex Promise.all structure anymore.
+        // const [fcp, lcp] = await Promise.all([fcpMetricPromise, lcpMetricPromise, interactionsPromise]);
 
         const metrics = { FCP: fcp, LCP: lcp, mode };
         console.log('[SERVER]: Final metrics collected:', metrics);
@@ -270,10 +269,26 @@ app.post('/test', async (req, res) => {
         const screenshot = await page.screenshot({ encoding: 'base64' });
 
         console.log('✅ Test finished successfully.');
-        res.json({ metrics, screenshot });
+        return { metrics, screenshot };
+        })();
 
+        // This race condition is now inside the main try block
+        const result = await Promise.race([
+            testPromise,
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Global test timeout: The test took too long to complete (90s).')), 90000)
+            )
+        ]);
+        res.json(result);
     } catch (error) {
-        console.error('An error occurred during the test:', error);
+        // Log the specific error message
+        if (error.name === 'TimeoutError') {
+             console.error(`An error occurred during the test: Puppeteer Timeout - ${error.message}`);
+        } else if (error.message.includes('Global test timeout')) {
+             console.error(`An error occurred during the test: ${error.message}`);
+        } else {
+             console.error('An error occurred during the test:', error);
+        }
         res.status(500).json({ error: 'Test failed. Check server logs for details.' });
     } finally {
         if (browser) {
@@ -282,6 +297,6 @@ app.post('/test', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, 'localhost', () => {
     console.log(`🚀 Performance Tester server is running at http://localhost:${PORT}`);
 });
