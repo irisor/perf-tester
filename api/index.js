@@ -1,11 +1,39 @@
-// server.js
-// This is the core engine of our performance testing tool.
+// api/index.js
+// This is the core engine of our performance testing tool, structured as a Vercel Serverless Function.
+
+/**
+ * @fileoverview This file contains the Express server logic for a web performance testing tool.
+
+
+/**
+ * @fileoverview This file contains the Express server logic for a web performance testing tool.
+ * It exposes a '/test' endpoint that uses Puppeteer to run performance analysis on a given URL.
+ *
+ * --- ENVIRONMENT-SPECIFIC BEHAVIOR ---
+ * The server's behavior changes based on the NODE_ENV environment variable.
+ *
+ * 1. Development (local, NODE_ENV is not 'production'):
+ *    - Puppeteer launches a full, visible browser (`headless: false`).
+ *    - It uses the locally installed Google Chrome browser.
+ *    - REQUIREMENTS: Google Chrome must be installed on the local machine.
+ *    - To run: `npm run dev`
+ *
+ * 2. Production (Vercel, NODE_ENV = 'production'):
+ *    - Puppeteer uses the `@sparticuz/chromium` package, which is optimized for serverless environments.
+ *    - The browser runs in headless mode (`headless: true`).
+ *    - It uses specific launch arguments for stability in a containerized environment.
+ *    - REQUIREMENTS: The `NODE_ENV` variable must be set to 'production'.
+ *      (Note: Vercel sets this automatically for production deployments.)
+ *
+ * This dual-mode setup provides a rich debugging experience locally while ensuring
+ * compatibility and performance in the deployed Vercel environment.
+ */
 
 const express = require('express');
 const path = require('path');
 
 const app = express(); // Initialize Express app
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // PageSpeed Lighthouse throttling profiles
 const LIGHTHOUSE_THROTTLING = {
@@ -36,11 +64,8 @@ const LIGHTHOUSE_THROTTLING = {
 // --- Middleware Configuration ---
 
 // 1. Middleware to parse JSON request bodies.
-app.use(express.json());
-
-// 2. Middleware to serve static files (HTML, CSS, JS) from the 'public' directory.
-// This is the crucial part that ensures requests for /js/main.js and /css/style.css are handled correctly.
-app.use(express.static(path.join(__dirname, 'public')));
+// Increase payload limit for base64 screenshot
+app.use(express.json({ limit: '10mb' }));
 
 /**
  * Executes a single performance test run for a given URL.
@@ -141,7 +166,9 @@ async function runSingleTest(browser, { url, rules, mode, disableCache }) {
 // The main API endpoint for running a test
 app.post('/test', async (req, res) => {
     // LAZY REQUIRE: Load heavy modules only when the endpoint is called.
-    const puppeteer = require('puppeteer'); // axios is no longer needed
+    // Use puppeteer-core and a serverless-compatible chromium package
+    const puppeteer = require('puppeteer-core');
+    const chromium = require('@sparticuz/chromium');
 
     const { url, rules, mode = 'custom', runs = 3, disableCache = false, dryRun = false } = req.body; // Add 'dryRun' parameter
 
@@ -152,7 +179,11 @@ app.post('/test', async (req, res) => {
         console.log('✅ Performing a true dry run (skipping Puppeteer).');
         return res.json({
             message: 'Dry run successful. Server is responsive and Puppeteer was skipped.',
-            metrics: { FCP: -1, LCP: -1, mode: 'dry-run' }
+            //metrics: { FCP: -1, LCP: -1, mode: 'dry-run' }
+            parameters: { url: 'dry-run', rules: {}, mode: 'dry-run', disableCache: false },
+            averageMetrics: { FCP: -1, LCP: -1 },
+            individualRuns: [{ FCP: -1, LCP: -1 }],
+            screenshot: ''
         });
     }
 
@@ -166,13 +197,20 @@ app.post('/test', async (req, res) => {
     let browser;
     try {
         const testRunner = async () => {
-            console.log('[DEBUG] Launching Puppeteer browser...');
-            browser = await puppeteer.launch({
-                headless: true,
+            // Unify the browser launch logic to use @sparticuz/chromium in all environments.
+            // This works locally (including Cloud Shell) and in production (Vercel).
+            console.log('[DEBUG] Preparing to launch browser using @sparticuz/chromium...');
+            const launchOptions = {
+                args: chromium.args,
+                defaultViewport: chromium.defaultViewport,
+                executablePath: await chromium.executablePath(),
+                headless: chromium.headless, // Will be true in server-like environments
                 timeout: 60000, // Increased timeout for browser launch
                 protocol: 'cdp',
-                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-            });
+            };
+
+            console.log('[DEBUG] Launching Puppeteer browser...');
+            browser = await puppeteer.launch(launchOptions);
             console.log('[DEBUG] Browser launched successfully.');
 
             const allMetrics = [];
@@ -240,6 +278,8 @@ app.post('/test', async (req, res) => {
              console.error(`An error occurred during the test: ${error.message}`);
         } else {
              console.error('An error occurred during the test:', error);
+             // Log the full error for better debugging, especially for launch issues
+             console.error('An error occurred during the test:', error.stack || error);
         }
         res.status(500).json({ error: 'Test failed. Check server logs for details.' });
     } finally {
@@ -363,14 +403,16 @@ function setupRequestInterceptor(page, { rules }) {
     });
 }
 
-// --- Catch-all Route ---
-// This must come *after* your API routes and static middleware. It ensures that any
-// direct browser navigation to a non-asset path still loads the main application.
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+// --- Server Initialization & Export ---
 
-// --- Server Initialization ---
-app.listen(PORT, () => {
-    console.log(`🚀 Performance Tester server is running at http://localhost:${PORT}`);
-});
+// Only run the server directly (e.g. `node server.js`) if this file is the main module.
+// This prevents the server from starting during Vercel's build process.
+// It also allows `npm run dev` to work locally.
+if (require.main === module) {
+    app.use(express.static(path.join(__dirname, '../public'))); // Serve static files from the root `public` folder
+    app.listen(PORT, () => {
+        console.log(`🚀 Performance Tester server is running at http://localhost:${PORT}`);
+    });
+}
+
+module.exports = app;
