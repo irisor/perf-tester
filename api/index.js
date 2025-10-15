@@ -31,6 +31,7 @@
 
 const express = require('express');
 const path = require('path');
+const fetch = require('node-fetch'); // Use a standard require for node-fetch
 
 const app = express(); // Initialize Express app
 const PORT = process.env.PORT || 3001;
@@ -361,8 +362,6 @@ function setupRequestInterceptor(page, { rules }) {
                 // To modify the HTML, we must intercept the request, fetch the content ourselves,
                 // modify it, and then respond with the modified content.
                 try {
-                    // We need to use a library to make an HTTP request. `node-fetch` is a good choice.
-                    const { default: fetch } = await import('node-fetch');
                     const fetchResponse = await fetch(requestUrl, {
                         method: request.method(),
                         headers: request.headers(),
