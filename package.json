@@ -2,7 +2,6 @@
   "name": "perf-tester",
   "version": "1.0.0",
   "description": "A simple tool to test website performance variations.",
-  "main": "api/index.js",
   "scripts": {
     "start": "node api/index.js",
     "dev": "nodemon api/index.js",
