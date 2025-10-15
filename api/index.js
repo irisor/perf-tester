@@ -199,12 +199,13 @@ app.post('/test', async (req, res) => {
         const testRunner = async () => {
             // Unify the browser launch logic to use @sparticuz/chromium in all environments.
             // This works locally (including Cloud Shell) and in production (Vercel).
+            // Use @sparticuz/chromium, which works seamlessly locally and in serverless environments.
             console.log('[DEBUG] Preparing to launch browser using @sparticuz/chromium...');
             const launchOptions = {
                 args: chromium.args,
                 defaultViewport: chromium.defaultViewport,
                 executablePath: await chromium.executablePath(),
-                headless: chromium.headless, // Will be true in server-like environments
+                headless: chromium.headless, // Automatically handles headless mode for local vs. serverless
                 timeout: 60000, // Increased timeout for browser launch
                 protocol: 'cdp',
             };
@@ -363,39 +364,50 @@ function setupRequestInterceptor(page, { rules }) {
 
         // Rule: Modify the main HTML document
         if (resourceType === 'document' && request.isNavigationRequest()) {
-            // Let the original request go through to avoid CORS issues with server-side fetch
-            const response = await request.continue();
-            if (response && response.ok() && response.headers()['content-type']?.includes('text/html')) {
-                let body = await response.text();
-                let modified = false;
-
-                // Apply defer rules
-                (rules.defer || []).forEach(fragment => {
-                    const regex = new RegExp(`(<script[^>]*src="[^"]*${fragment}[^"]*"[^>]*)>`, 'gi');
-                    if (regex.test(body)) {
-                        body = body.replace(regex, '$1 defer>');
-                        modified = true;
-                        console.log(`[HTML MOD]: Deferred script matching "${fragment}"`);
-                    }
+            // To modify the HTML, we must intercept the request, fetch the content ourselves,
+            // modify it, and then respond with the modified content.
+            // We must abort the original request to prevent it from reaching the browser.
+            try {
+                // We need to use a library to make an HTTP request. `node-fetch` is a good choice.
+                // Since it's not in package.json, let's use a dynamic import.
+                const { default: fetch } = await import('node-fetch');
+                const response = await fetch(requestUrl, {
+                    method: request.method(),
+                    headers: request.headers(),
                 });
 
-                // Apply HTML replace rules
-                if (rules.html_replace?.find) {
-                    body = body.replace(new RegExp(rules.html_replace.find, 'g'), rules.html_replace.replace);
-                    modified = true;
-                    console.log('[HTML MOD]: Applied HTML content replacement.');
-                }
+                if (response.ok && response.headers.get('content-type')?.includes('text/html')) {
+                    let body = await response.text();
+                    let modified = false;
 
-                // Only respond with modified content if a change was made
-                if (modified) {
+                    // Apply defer rules
+                    (rules.defer || []).forEach(fragment => {
+                        const regex = new RegExp(`(<script[^>]*src="[^"]*${fragment}[^"]*"[^>]*)>`, 'gi');
+                        if (regex.test(body)) {
+                            body = body.replace(regex, '$1 defer>');
+                            modified = true;
+                            console.log(`[HTML MOD]: Deferred script matching "${fragment}"`);
+                        }
+                    });
+
+                    // Apply HTML replace rules
+                    if (rules.html_replace?.find) {
+                        body = body.replace(new RegExp(rules.html_replace.find, 'g'), rules.html_replace.replace);
+                        modified = true;
+                        console.log('[HTML MOD]: Applied HTML content replacement.');
+                    }
+
+                    // Respond with the (potentially modified) body
                     return request.respond({
-                        status: response.status(),
-                        headers: response.headers(),
+                        status: response.status,
+                        headers: Object.fromEntries(response.headers.entries()),
                         body: body
                     });
                 }
+            } catch (error) {
+                console.error(`[INTERCEPTOR ERROR]: Failed to fetch and modify document for ${requestUrl}:`, error);
+                return request.abort('failed');
             }
-            return; // No modifications needed or not an HTML document
         }
 
         // Continue all other requests without modification
