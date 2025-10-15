@@ -1,8 +1,6 @@
 {
   "version": 2,
   "functions": {
-    "api/index.js": {
-      "maxDuration": 300
-    }
+    "api/index.js": { "maxDuration": 300 }
   }
 }
