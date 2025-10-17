@@ -3,6 +3,10 @@
 
 /**
  * @fileoverview This file contains the Express server logic for a web performance testing tool.
+
+
+/**
+ * @fileoverview This file contains the Express server logic for a web performance testing tool.
  * It exposes a '/test' endpoint that uses Puppeteer to run performance analysis on a given URL.
  *
  * --- ENVIRONMENT-SPECIFIC BEHAVIOR ---
@@ -27,6 +31,7 @@
 
 const express = require('express');
 const path = require('path');
+const fetch = require('node-fetch'); // Use a standard require for node-fetch
 
 const app = express(); // Initialize Express app
 const PORT = process.env.PORT || 3001;
@@ -161,124 +166,119 @@ async function runSingleTest(browser, { url, rules, mode, disableCache }) {
 
 // The main API endpoint for running a test
 app.post('/test', async (req, res) => {
-    // Add error handling wrapper for the entire endpoint
-    try {
-        // LAZY REQUIRE: Load heavy modules only when the endpoint is called.
-        // Use puppeteer-core and a serverless-compatible chromium package
-        const puppeteer = require('puppeteer-core');
-        const chromium = require('@sparticuz/chromium');
+    // LAZY REQUIRE: Load heavy modules only when the endpoint is called.
+    // Use puppeteer-core and a serverless-compatible chromium package
+    const puppeteer = require('puppeteer-core');
+    const chromium = require('@sparticuz/chromium');
 
-        const { url, rules, mode = 'custom', runs = 3, disableCache = false, dryRun = false } = req.body;
+    const { url, rules, mode = 'custom', runs = 3, disableCache = false, dryRun = false } = req.body; // Add 'dryRun' parameter
 
-        // A true dry run to test the server without launching Puppeteer at all.
-        if (dryRun) {
-            console.log('✅ Performing a true dry run (skipping Puppeteer).');
-            return res.json({
-                message: 'Dry run successful. Server is responsive and Puppeteer was skipped.',
-                parameters: { url: 'dry-run', rules: {}, mode: 'dry-run', disableCache: false },
-                averageMetrics: { FCP: -1, LCP: -1 },
-                individualRuns: [{ FCP: -1, LCP: -1 }],
-                screenshot: ''
-            });
-        }
+    // mode can be: 'custom', 'pagespeed-mobile', 'pagespeed-desktop'
 
-        if (!url) {
-            return res.status(400).json({ error: 'URL is required' });
-        }
-
-        console.log(`Starting test for URL: ${url} in ${mode} mode`);
-        console.log('With rules:', rules);
-
-        let browser;
-        try {
-            const result = await Promise.race([
-                (async () => {
-                    // Use @sparticuz/chromium, which works seamlessly locally and in serverless environments.
-                    console.log('[DEBUG] Preparing to launch browser using @sparticuz/chromium...');
-                    const launchOptions = {
-                        args: chromium.args,
-                        defaultViewport: chromium.defaultViewport,
-                        executablePath: await chromium.executablePath(),
-                        headless: chromium.headless,
-                        timeout: 60000,
-                    };
-
-                    console.log('[DEBUG] Launching Puppeteer browser...');
-                    browser = await puppeteer.launch(launchOptions);
-                    console.log('[DEBUG] Browser launched successfully.');
-
-                    const allMetrics = [];
-                    for (let i = 0; i < runs; i++) {
-                        console.log(`\n--- Starting run ${i + 1} of ${runs} for ${url} ---`);
-                        const metrics = await runSingleTest(browser, { url, rules, mode, disableCache });
-                        allMetrics.push(metrics);
-                        console.log(`--- Finished run ${i + 1}: FCP=${metrics.FCP?.toFixed(2)}ms, LCP=${metrics.LCP?.toFixed(2)}ms ---`);
-                    }
-
-                    // Calculate median values
-                    const fcpValues = allMetrics.map(m => m.FCP).filter(v => v != null).sort((a, b) => a - b);
-                    const lcpValues = allMetrics.map(m => m.LCP).filter(v => v != null).sort((a, b) => a - b);
-
-                    const getMedian = (arr) => {
-                        if (arr.length === 0) return null;
-                        const mid = Math.floor(arr.length / 2);
-                        return arr.length % 2 !== 0 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
-                    };
-
-                    const medianMetrics = {
-                        FCP: getMedian(fcpValues),
-                        LCP: getMedian(lcpValues),
-                    };
-
-                    console.log('[SERVER]: Final median metrics:', medianMetrics);
-
-                    // Take a screenshot on a final, clean run
-                    console.log('[DEBUG] Taking final screenshot...');
-                    const page = await browser.newPage();
-                    await page.setViewport({ width: 1280, height: 800 });
-                    await page.goto(url, { waitUntil: 'load' });
-                    const screenshot = await page.screenshot({ encoding: 'base64' });
-                    await page.close();
-
-                    console.log('✅ All test runs finished successfully.');
-                    return {
-                        parameters: { url, rules, mode, disableCache },
-                        averageMetrics: { FCP: medianMetrics.FCP, LCP: medianMetrics.LCP },
-                        individualRuns: allMetrics,
-                        screenshot
-                    };
-                })(),
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error(`Global test timeout: The test took too long to complete (${runs * 90}s).`)), runs * 90000)
-                )
-            ]);
-            res.json(result);
-        } catch (error) {
-            if (error.name === 'TimeoutError') {
-                console.error(`An error occurred during the test: Puppeteer Timeout - ${error.message}`);
-            } else if (error.message.includes('Global test timeout')) {
-                console.error(`An error occurred during the test: ${error.message}`);
-            } else {
-                console.error('An error occurred during the test:', error);
-                console.error('Stack trace:', error.stack || error);
-            }
-            // Always return JSON, never throw or let Express return HTML
-            return res.status(500).json({ 
-                error: 'Test failed. Check server logs for details.',
-                details: error.message 
-            });
-        } finally {
-            if (browser) {
-                await browser.close();
-            }
-        }
-    } catch (error) {
-        // Catch any errors from the outer try block (e.g., require failures)
-        console.error('Critical error in /test endpoint:', error);
-        return res.status(500).json({ 
-            error: 'Server error occurred',
-            details: error.message 
+    // A true dry run to test the server without launching Puppeteer at all.
+    if (dryRun) {
+        console.log('✅ Performing a true dry run (skipping Puppeteer).');
+        return res.json({
+            message: 'Dry run successful. Server is responsive and Puppeteer was skipped.',
+            //metrics: { FCP: -1, LCP: -1, mode: 'dry-run' }
+            parameters: { url: 'dry-run', rules: {}, mode: 'dry-run', disableCache: false },
+            averageMetrics: { FCP: -1, LCP: -1 },
+            individualRuns: [{ FCP: -1, LCP: -1 }],
+            screenshot: ''
         });
+    }
+
+    if (!url) {
+        return res.status(400).json({ error: 'URL is required' });
+    }
+
+    console.log(`Starting test for URL: ${url} in ${mode} mode`);
+    console.log('With rules:', rules);
+
+    let browser;
+    try {
+        const testRunner = async () => {
+            // This block was defined but never called. The logic has been moved outside.
+        };
+
+        const result = await Promise.race([
+            (async () => {
+                // Use @sparticuz/chromium, which works seamlessly locally and in serverless environments.
+                console.log('[DEBUG] Preparing to launch browser using @sparticuz/chromium...');
+                const launchOptions = {
+                    args: chromium.args,
+                    defaultViewport: chromium.defaultViewport,
+                    executablePath: await chromium.executablePath(),
+                    headless: chromium.headless, // Automatically handles headless mode for local vs. serverless
+                    timeout: 60000, // Increased timeout for browser launch
+                };
+
+                console.log('[DEBUG] Launching Puppeteer browser...');
+                browser = await puppeteer.launch(launchOptions);
+                console.log('[DEBUG] Browser launched successfully.');
+
+                const allMetrics = [];
+                for (let i = 0; i < runs; i++) {
+                    console.log(`\n--- Starting run ${i + 1} of ${runs} for ${url} ---`);
+                    const metrics = await runSingleTest(browser, { url, rules, mode, disableCache });
+                    allMetrics.push(metrics);
+                    console.log(`--- Finished run ${i + 1}: FCP=${metrics.FCP?.toFixed(2)}ms, LCP=${metrics.LCP?.toFixed(2)}ms ---`);
+                }
+
+                // Calculate median values, which are more robust against outliers than averages.
+                const fcpValues = allMetrics.map(m => m.FCP).filter(v => v != null).sort((a, b) => a - b);
+                const lcpValues = allMetrics.map(m => m.LCP).filter(v => v != null).sort((a, b) => a - b);
+
+                const getMedian = (arr) => {
+                    if (arr.length === 0) return null;
+                    const mid = Math.floor(arr.length / 2);
+                    return arr.length % 2 !== 0 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+                };
+
+                const medianMetrics = {
+                    FCP: getMedian(fcpValues),
+                    LCP: getMedian(lcpValues),
+                };
+
+                console.log('[SERVER]: Final median metrics:', medianMetrics);
+
+                // Take a screenshot on a final, clean run to ensure it's representative.
+                console.log('[DEBUG] Taking final screenshot...');
+                const page = await browser.newPage();
+                await page.setViewport({ width: 1280, height: 800 });
+                await page.goto(url, { waitUntil: 'load' });
+                const screenshot = await page.screenshot({ encoding: 'base64' });
+                await page.close();
+
+                console.log('✅ All test runs finished successfully.');
+                // The frontend expects a specific structure. Let's build it.
+                return {
+                    parameters: { url, rules, mode, disableCache },
+                    averageMetrics: { FCP: medianMetrics.FCP, LCP: medianMetrics.LCP },
+                    individualRuns: allMetrics,
+                    screenshot
+                };
+            })(),
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error(`Global test timeout: The test took too long to complete (${runs * 90}s).`)), runs * 90000)
+            )
+        ]);
+        res.json(result);
+    } catch (error) {
+        if (error.name === 'TimeoutError') {
+             console.error(`An error occurred during the test: Puppeteer Timeout - ${error.message}`);
+        } else if (error.message.includes('Global test timeout')) {
+             console.error(`An error occurred during the test: ${error.message}`);
+        } else {
+             console.error('An error occurred during the test:', error);
+             // Log the full error for better debugging, especially for launch issues
+             console.error('An error occurred during the test:', error.stack || error);
+        }
+        res.status(500).json({ error: 'Test failed. Check server logs for details.' });
+    } finally {
+        if (browser) {
+            await browser.close();
+        }
     }
 });
 
@@ -287,14 +287,16 @@ app.post('/test', async (req, res) => {
  * @param {object} page - The Puppeteer page object.
  */
 async function injectPerformanceObservers(page) {
+    // Expose a function to the page that the observer can call.
+    // We re-expose it for every new page to ensure the binding is fresh.
     await page.exposeFunction('__reportFcp', fcp => {
         console.log(`[SERVER]: __reportFcp called from browser with value: ${fcp}`);
-        page.emit('fcp-reported', fcp);
+        page.emit('fcp-reported', fcp); // Emit an event on the page object
     });
 
     await page.evaluateOnNewDocument(() => {
         if (window.self !== window.top) {
-            return;
+            return; // Skip iframes
         }
         console.log('[PERF OBSERVER]: Script injected in main frame.');
         
@@ -309,7 +311,7 @@ async function injectPerformanceObservers(page) {
             }
         }).observe({ type: 'paint', buffered: true });
 
-        // LCP Observer
+        // LCP Observer - store ALL updates in an array
         window.__lcpUpdates = [];
         new PerformanceObserver((entryList) => {
             const entries = entryList.getEntries();
@@ -343,6 +345,8 @@ async function injectPerformanceObservers(page) {
  */
 function setupRequestInterceptor(page, { rules }) {
     page.on('request', async (request) => {
+        // Wrap the entire handler in a try-catch to prevent unhandled promise rejections
+        // which can crash the Vercel function and prevent logs from appearing.
         try {
             const requestUrl = request.url();
             const resourceType = request.resourceType();
@@ -355,8 +359,9 @@ function setupRequestInterceptor(page, { rules }) {
 
             // Rule: Modify the main HTML document
             if (resourceType === 'document' && request.isNavigationRequest()) {
+                // To modify the HTML, we must intercept the request, fetch the content ourselves,
+                // modify it, and then respond with the modified content.
                 try {
-                    const { default: fetch } = await import('node-fetch');
                     const fetchResponse = await fetch(requestUrl, {
                         method: request.method(),
                         headers: request.headers(),
@@ -383,6 +388,7 @@ function setupRequestInterceptor(page, { rules }) {
                             console.log('[HTML MOD]: Applied HTML content replacement.');
                         }
 
+                        // Respond with the (potentially modified) body
                         return request.respond({
                             status: fetchResponse.status,
                             headers: Object.fromEntries(fetchResponse.headers.entries()),
@@ -390,10 +396,12 @@ function setupRequestInterceptor(page, { rules }) {
                         });
                     }
 
+                    // If the response is not HTML or not OK, we must still handle the request.
+                    // We'll respond with the original content we fetched.
                     return request.respond({
                         status: fetchResponse.status,
                         headers: Object.fromEntries(fetchResponse.headers.entries()),
-                        body: await fetchResponse.buffer()
+                        body: await fetchResponse.buffer() // Use buffer for any content type
                     });
                 } catch (error) {
                     console.error(`[INTERCEPTOR ERROR]: Failed to fetch and modify document for ${requestUrl}:`, error);
@@ -401,9 +409,11 @@ function setupRequestInterceptor(page, { rules }) {
                 }
             }
 
+            // Continue all other requests without modification
             return request.continue();
         } catch (error) {
             console.error(`[FATAL INTERCEPTOR ERROR] Request handler for "${request.url()}" failed:`, error);
+            // Abort the request if it's still pending, to avoid leaving it hanging.
             if (!request.isInterceptResolutionHandled()) {
                 request.abort();
             }
@@ -413,25 +423,14 @@ function setupRequestInterceptor(page, { rules }) {
 
 // --- Server Initialization & Export ---
 
-// For local development
+// Only run the server directly (e.g. `node server.js`) if this file is the main module.
+// This prevents the server from starting during Vercel's build process.
+// It also allows `npm run dev` to work locally.
 if (require.main === module) {
-    app.use(express.static(path.join(__dirname, '../public')));
+    app.use(express.static(path.join(__dirname, '../public'))); // Serve static files from the root `public` folder
     app.listen(PORT, () => {
         console.log(`🚀 Performance Tester server is running at http://localhost:${PORT}`);
     });
 }
 
-// For Vercel serverless function - CRITICAL FIX
-module.exports = (req, res) => {
-    // Ensure CORS and proper headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-    
-    // Pass the request to Express
-    return app(req, res);
-};
+module.exports = app;
