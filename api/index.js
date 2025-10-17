@@ -208,7 +208,7 @@ app.post('/test', async (req, res) => {
                 const launchOptions = {
                     args: chromium.args,
                     defaultViewport: chromium.defaultViewport,
-                    executablePath: await chromium.executablePath(),
+                    executablePath: await chromium.executablePath({headless: true}),
                     headless: chromium.headless, // Automatically handles headless mode for local vs. serverless
                     timeout: 60000, // Increased timeout for browser launch
                 };
