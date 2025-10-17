@@ -207,8 +207,8 @@ app.post('/test', async (req, res) => {
                 console.log('[DEBUG] Preparing to launch browser using @sparticuz/chromium...');
                 const launchOptions = {
                     args: chromium.args,
-                    defaultViewport: chromium.defaultViewport,
-                    executablePath: await chromium.executablePath({headless: true}),
+                    defaultViewport: null, // Set to null to prevent conflicts with serverless setup
+                    executablePath: await chromium.executablePath(),
                     headless: chromium.headless, // Automatically handles headless mode for local vs. serverless
                     timeout: 60000, // Increased timeout for browser launch
                 };
