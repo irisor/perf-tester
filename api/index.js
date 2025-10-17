@@ -433,4 +433,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = app;
+module.exports = (req, res) => app(req, res);
