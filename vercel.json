@@ -1,12 +1,6 @@
 {
   "version": 2,
-  "rewrites": [
-    { "source": "/test", "destination": "/api/index" }
-  ],
   "functions": {
-    "api/index.js": { 
-      "maxDuration": 300,
-      "memory": 3008
-    }
+    "api/index.js": { "maxDuration": 300 }
   }
 }
