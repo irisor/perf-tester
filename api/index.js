@@ -335,11 +335,11 @@ async function testHandler(req, res) {
     }
 }
 
-// For Vercel serverless (production)
-if (process.env.VERCEL) {
-    module.exports = testHandler;
-} else {
-    // For local development with Express
+// Export for both environments
+module.exports = testHandler;
+
+// For local development with Express - only run when executed directly
+if (require.main === module) {
     const express = require('express');
     const path = require('path');
     const app = express();
