@@ -4,6 +4,9 @@
     { "source": "/test", "destination": "/api/test" }
   ],
   "functions": {
-    "api/test.js": { "maxDuration": 300 }
+    "api/index.js": {
+      "maxDuration": 300,
+      "includeFiles": "node_modules/@sparticuz/chromium/bin/**"
+    }
   }
 }
