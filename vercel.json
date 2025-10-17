@@ -1,6 +1,9 @@
 {
   "version": 2,
+  "rewrites": [
+    { "source": "/test", "destination": "/api/test" }
+  ],
   "functions": {
-    "api/index.js": { "maxDuration": 300 }
+    "api/test.js": { "maxDuration": 300 }
   }
 }
