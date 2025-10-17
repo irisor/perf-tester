@@ -22,6 +22,22 @@ A Node.js-based web performance analysis tool that uses Puppeteer to measure key
 
 ---
 
+## Project Structure
+
+The project follows a simple structure optimized for Vercel deployment.
+
+```
+/
+├── api/
+│   └── index.js        # Vercel Serverless Function entry point. Contains all Express and Puppeteer logic.
+├── .gitignore
+├── package.json        # Project dependencies and scripts.
+├── README.md           # This documentation file.
+└── vercel.json         # Vercel deployment configuration (e.g., function timeout).
+```
+
+---
+
 ## Getting Started
 
 ### Prerequisites
