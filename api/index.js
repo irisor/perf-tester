@@ -206,8 +206,7 @@ app.post('/test', async (req, res) => {
                 // Use @sparticuz/chromium, which works seamlessly locally and in serverless environments.
                 console.log('[DEBUG] Preparing to launch browser using @sparticuz/chromium...');
                 const launchOptions = {
-                    args: chromium.args,
-                    // Add --no-sandbox and explicitly set the library path for maximum compatibility in Vercel.
+                    // Combine the recommended args from the library with the essential --no-sandbox flag.
                     args: [
                         ...chromium.args,
                         '--no-sandbox'
