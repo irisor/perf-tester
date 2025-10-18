@@ -205,6 +205,11 @@ app.post('/test', async (req, res) => {
             (async () => {
                 // Use @sparticuz/chromium, which works seamlessly locally and in serverless environments.
                 console.log('[DEBUG] Preparing to launch browser using @sparticuz/chromium...');
+
+                // Explicitly set environment variables for the bundled libraries.
+                // This is the most robust way to ensure Chromium can find its dependencies.
+                await chromium.font('https://raw.githack.com/googlei18n/noto-cjk/main/NotoSansCJK-Regular.ttc');
+
                 const launchOptions = {
                     // Combine the recommended args from the library with the essential --no-sandbox flag.
                     args: [
