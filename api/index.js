@@ -171,7 +171,7 @@ app.post('/test', async (req, res) => {
     const puppeteer = require('puppeteer-core');
     const chromium = require('@sparticuz/chromium');
 
-    const { url, rules, mode = 'custom', runs = 3, disableCache = false, dryRun = false } = req.body; // Add 'dryRun' parameter
+    const { url, rules = {}, mode = 'custom', runs = 3, disableCache = false, dryRun = false } = req.body; // Add 'dryRun' parameter
 
     // mode can be: 'custom', 'pagespeed-mobile', 'pagespeed-desktop'
 
@@ -197,10 +197,6 @@ app.post('/test', async (req, res) => {
 
     let browser;
     try {
-        const testRunner = async () => {
-            // This block was defined but never called. The logic has been moved outside.
-        };
-
         const result = await Promise.race([
             (async () => {
                 // Use @sparticuz/chromium, which works seamlessly locally and in serverless environments.
@@ -208,7 +204,9 @@ app.post('/test', async (req, res) => {
 
                 // Explicitly set environment variables for the bundled libraries.
                 // This is the most robust way to ensure Chromium can find its dependencies.
-                await chromium.font('https://raw.githack.com/googlei18n/noto-cjk/main/NotoSansCJK-Regular.ttc');
+                // Use a stable Google Font URL to prevent 404 errors from unreliable sources.
+                await chromium.font('https://fonts.gstatic.com/s/roboto/v27/KFOmCnqEu92Fr1Mu4mxK.woff2');
+                console.log('[DEBUG] After calling chromium.font()');
 
                 const launchOptions = {
                     // Combine the recommended args from the library with the essential --no-sandbox flag.
@@ -274,14 +272,16 @@ app.post('/test', async (req, res) => {
         ]);
         res.json(result);
     } catch (error) {
-        if (error.name === 'TimeoutError') {
+        // Make error handling robust: check for error.message before accessing it.
+        // Puppeteer can reject with non-Error objects (e.g., simple strings).
+        if (error && error.name === 'TimeoutError') {
              console.error(`An error occurred during the test: Puppeteer Timeout - ${error.message}`);
-        } else if (error.message.includes('Global test timeout')) {
+        } else if (error && error.message && error.message.includes('Global test timeout')) {
              console.error(`An error occurred during the test: ${error.message}`);
         } else {
-             console.error('An error occurred during the test:', error);
-             // Log the full error for better debugging, especially for launch issues
-             console.error('An error occurred during the test:', error.stack || error);
+             // Handle cases where 'error' is not a standard Error object.
+             console.error('An unexpected error occurred during the test:', error);
+             console.error('Stack trace (if available):', error ? error.stack : 'N/A');
         }
         res.status(500).json({ error: 'Test failed. Check server logs for details.' });
     } finally {
@@ -361,7 +361,8 @@ function setupRequestInterceptor(page, { rules }) {
             const resourceType = request.resourceType();
 
             // Rule: Block requests based on URL fragments
-            if (rules.block && rules.block.some(fragment => requestUrl.includes(fragment))) {
+            // Ensure fragment is a string before calling .includes() to prevent TypeError.
+            if (rules.block && rules.block.some(fragment => fragment && requestUrl.includes(fragment))) {
                 console.log('🚫 Blocking:', requestUrl);
                 return request.abort();
             }
@@ -382,6 +383,9 @@ function setupRequestInterceptor(page, { rules }) {
 
                         // Apply defer rules
                         (rules.defer || []).forEach(fragment => {
+                            // Skip any null, undefined, or empty string fragments to prevent invalid regex.
+                            if (!fragment) return;
+
                             const regex = new RegExp(`(<script[^>]*src="[^"]*${fragment}[^"]*"[^>]*)>`, 'gi');
                             if (regex.test(body)) {
                                 body = body.replace(regex, '$1 defer>');
@@ -390,11 +394,27 @@ function setupRequestInterceptor(page, { rules }) {
                             }
                         });
 
+                        // Apply block rules to HTML body (remove script tags)
+                        (rules.block || []).forEach(fragment => {
+                            // Skip any null, undefined, or empty string fragments to prevent invalid regex.
+                            if (!fragment) return;
+
+                            const regex = new RegExp(`<script[^>]*src="[^"]*${fragment}[^"]*"[^>]*><\\/script>`, 'gi');
+                            if (regex.test(body)) {
+                                body = body.replace(regex, '');
+                                modified = true;
+                                console.log(`[HTML MOD]: Removed script matching "${fragment}"`);
+                            }
+                        });
+
                         // Apply HTML replace rules
-                        if (rules.html_replace?.find) {
-                            body = body.replace(new RegExp(rules.html_replace.find, 'g'), rules.html_replace.replace);
-                            modified = true;
-                            console.log('[HTML MOD]: Applied HTML content replacement.');
+                        // Ensure both 'find' and 'replace' properties exist and are strings to prevent errors.
+                        if (rules.html_replace && 
+                            typeof rules.html_replace.find === 'string' && 
+                            typeof rules.html_replace.replace === 'string') {
+                                body = body.replace(new RegExp(rules.html_replace.find, 'g'), rules.html_replace.replace);
+                                modified = true;
+                                console.log('[HTML MOD]: Applied HTML content replacement.');
                         }
 
                         // Respond with the (potentially modified) body
@@ -408,7 +428,7 @@ function setupRequestInterceptor(page, { rules }) {
                     // If the response is not HTML or not OK, we must still handle the request.
                     // We'll respond with the original content we fetched.
                     return request.respond({
-                        status: fetchResponse.status,
+                        status: fetchResponse.status, // Pass through the original status (e.g., 404)
                         headers: Object.fromEntries(fetchResponse.headers.entries()),
                         body: await fetchResponse.buffer() // Use buffer for any content type
                     });
