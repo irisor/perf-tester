@@ -207,9 +207,14 @@ app.post('/test', async (req, res) => {
                 console.log('[DEBUG] Preparing to launch browser using @sparticuz/chromium...');
                 const launchOptions = {
                     args: chromium.args,
-                    defaultViewport: null, // Set to null to prevent conflicts with serverless setup
+                    // Add --no-sandbox and explicitly set the library path for maximum compatibility in Vercel.
+                    args: [
+                        ...chromium.args,
+                        '--no-sandbox'
+                    ],
+                    defaultViewport: chromium.defaultViewport,
                     executablePath: await chromium.executablePath(),
-                    headless: chromium.headless, // Automatically handles headless mode for local vs. serverless
+                    headless: chromium.headless, // Use the recommended headless mode from the library
                     timeout: 60000, // Increased timeout for browser launch
                 };
 
