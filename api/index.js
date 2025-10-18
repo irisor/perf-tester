@@ -218,6 +218,8 @@ app.post('/test', async (req, res) => {
                     executablePath: await chromium.executablePath(),
                     headless: chromium.headless, // Use the recommended headless mode from the library
                     timeout: 60000, // Increased timeout for browser launch
+                    // Explicitly pass the environment variables set by @sparticuz/chromium to the browser process.
+                    env: process.env
                 };
 
                 console.log('[DEBUG] Launching Puppeteer browser...');
