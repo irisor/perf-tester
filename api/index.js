@@ -168,6 +168,9 @@ async function runSingleTest(browser, { url, rules, mode, disableCache }) {
 app.post('/test', async (req, res) => {
     // LAZY REQUIRE: Load heavy modules only when the endpoint is called.
     // Use puppeteer-core and a serverless-compatible chromium package
+    // Set the AWS Lambda JS Runtime env var BEFORE requiring chromium
+    // This tells @sparticuz/chromium to use the Amazon Linux 2023 compatible binaries
+    process.env.AWS_LAMBDA_JS_RUNTIME = 'nodejs22.x';
     const puppeteer = require('puppeteer-core');
     const chromium = require('@sparticuz/chromium');
 
