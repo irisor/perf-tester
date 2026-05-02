@@ -205,18 +205,46 @@ app.post('/test', async (req, res) => {
                 // Explicitly set environment variables for the bundled libraries.
                 // This is the most robust way to ensure Chromium can find its dependencies.
                 // Use a stable Google Font URL to prevent 404 errors from unreliable sources.
-                await chromium.font('https://fonts.gstatic.com/s/roboto/v27/KFOmCnqEu92Fr1Mu4mxK.woff2');
-                console.log('[DEBUG] After calling chromium.font()');
+                const isLocal = !process.env.VERCEL && process.env.NODE_ENV !== 'production';
+                let executablePath;
+
+                if (isLocal) {
+                    console.log('[DEBUG] Running locally. Using system Chrome.');
+                    const fs = require('fs');
+                    const localPaths = [
+                        '/usr/bin/google-chrome',
+                        '/usr/bin/google-chrome-stable',
+                        '/usr/bin/chromium-browser',
+                        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+                        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+                        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
+                    ];
+                    for (const p of localPaths) {
+                        if (fs.existsSync(p)) {
+                            executablePath = p;
+                            break;
+                        }
+                    }
+                    if (!executablePath) {
+                        throw new Error('Local Chrome/Chromium installation not found.');
+                    }
+                } else {
+                    await chromium.font('https://fonts.gstatic.com/s/roboto/v27/KFOmCnqEu92Fr1Mu4mxK.woff2');
+                    console.log('[DEBUG] After calling chromium.font()');
+                    
+                    executablePath = await chromium.executablePath();
+                    // Fix for Vercel Node 20 (Amazon Linux 2023) missing libnss3.so
+                    if (executablePath.includes('/tmp/')) {
+                        process.env.LD_LIBRARY_PATH = executablePath.substring(0, executablePath.lastIndexOf('/'));
+                    }
+                }
 
                 const launchOptions = {
                     // Combine the recommended args from the library with the essential --no-sandbox flag.
-                    args: [
-                        ...chromium.args,
-                        '--no-sandbox'
-                    ],
+                    args: isLocal ? ['--no-sandbox', '--disable-setuid-sandbox'] : [...chromium.args, '--no-sandbox'],
                     defaultViewport: chromium.defaultViewport,
-                    executablePath: await chromium.executablePath(),
-                    headless: chromium.headless, // Use the recommended headless mode from the library
+                    executablePath: executablePath,
+                    headless: isLocal ? false : chromium.headless, // Use visible browser locally as per docs
                     timeout: 60000, // Increased timeout for browser launch
                     // Explicitly pass the environment variables set by @sparticuz/chromium to the browser process.
                     env: process.env
