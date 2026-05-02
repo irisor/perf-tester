@@ -60,8 +60,12 @@ function renderHistory() {
             <td>${params.mode}</td>
             <td>${params.disableCache ? 'Disabled' : 'Enabled'}</td>
             <td><div class="summary-cell" title="${rulesSummary || 'None'}">${rulesSummary || 'None'}</div></td>
-            <td>${metrics.FCP ? metrics.FCP.toFixed(2) : 'N/A'}</td>
-            <td>${metrics.LCP ? metrics.LCP.toFixed(2) : 'N/A'}</td>
+            <td>${metrics.FCP != null ? metrics.FCP.toFixed(2) : 'N/A'}</td>
+            <td>${metrics.LCP != null ? metrics.LCP.toFixed(2) : 'N/A'}</td>
+            <td>${metrics.TBT != null ? metrics.TBT.toFixed(2) : 'N/A'}</td>
+            <td>${metrics.speedIndex != null ? metrics.speedIndex.toFixed(2) : 'N/A'}</td>
+            <td>${metrics.CLS != null ? metrics.CLS.toFixed(3) : 'N/A'}</td>
+            <td>${metrics.pageWeight != null ? (metrics.pageWeight / 1024).toFixed(2) : 'N/A'}</td>
         `;
         historyBody.appendChild(row);
     });
@@ -104,8 +108,12 @@ compareBtn.addEventListener('click', () => {
             <h4>${displayName}</h4>
             <p><small>URL: ${result.parameters.url}</small></p>
             <p><strong>Mode:</strong> ${result.parameters.mode} ${result.parameters.disableCache ? '(No Cache)' : ''}</p>
-            <p><strong>Avg FCP:</strong> ${result.averageMetrics.FCP ? result.averageMetrics.FCP.toFixed(2) + ' ms' : 'N/A'}</p>
-            <p><strong>Avg LCP:</strong> ${result.averageMetrics.LCP ? result.averageMetrics.LCP.toFixed(2) + ' ms' : 'N/A'}</p>
+            <p><strong>Avg FCP:</strong> ${result.averageMetrics.FCP != null ? result.averageMetrics.FCP.toFixed(2) + ' ms' : 'N/A'}</p>
+            <p><strong>Avg LCP:</strong> ${result.averageMetrics.LCP != null ? result.averageMetrics.LCP.toFixed(2) + ' ms' : 'N/A'}</p>
+            <p><strong>Avg TBT:</strong> ${result.averageMetrics.TBT != null ? result.averageMetrics.TBT.toFixed(2) + ' ms' : 'N/A'}</p>
+            <p><strong>Avg Speed Index:</strong> ${result.averageMetrics.speedIndex != null ? result.averageMetrics.speedIndex.toFixed(2) + ' ms' : 'N/A'}</p>
+            <p><strong>Avg CLS:</strong> ${result.averageMetrics.CLS != null ? result.averageMetrics.CLS.toFixed(3) : 'N/A'}</p>
+            <p><strong>Avg Page Weight:</strong> ${result.averageMetrics.pageWeight != null ? (result.averageMetrics.pageWeight / 1024).toFixed(2) + ' KB' : 'N/A'}</p>
             <p><small><strong>Rules:</strong> ${rulesSummary || 'None'}</small></p>
         `;
         comparisonView.appendChild(item);
@@ -146,7 +154,7 @@ exportCsvBtn.addEventListener('click', () => {
     // --- 2. Build CSV Header ---
     const header = [
         'Test Name', 'URL', 'Mode', 'Cache Disabled',
-        'Avg FCP', 'Avg LCP',
+        'Avg FCP', 'Avg LCP', 'Avg TBT', 'Avg Speed Index', 'Avg CLS', 'Avg Page Weight',
         ...sortedRuleColumns,
         ...runColumns
     ];
@@ -162,8 +170,12 @@ exportCsvBtn.addEventListener('click', () => {
             'URL': params.url || 'N/A',
             'Mode': params.mode || 'N/A',
             'Cache Disabled': params.disableCache ? '1' : '0',
-            'Avg FCP': metrics.FCP?.toFixed(2) || '',
-            'Avg LCP': metrics.LCP?.toFixed(2) || '',
+            'Avg FCP': metrics.FCP != null ? metrics.FCP.toFixed(2) : '',
+            'Avg LCP': metrics.LCP != null ? metrics.LCP.toFixed(2) : '',
+            'Avg TBT': metrics.TBT != null ? metrics.TBT.toFixed(2) : '',
+            'Avg Speed Index': metrics.speedIndex != null ? metrics.speedIndex.toFixed(2) : '',
+            'Avg CLS': metrics.CLS != null ? metrics.CLS.toFixed(3) : '',
+            'Avg Page Weight': metrics.pageWeight != null ? (metrics.pageWeight / 1024).toFixed(2) : '',
         };
 
         // Populate rule columns
@@ -182,8 +194,12 @@ exportCsvBtn.addEventListener('click', () => {
         // Populate individual run columns
         for (let i = 0; i < maxRuns; i++) {
             const run = result.individualRuns?.[i];
-            row[`Run ${i + 1} FCP`] = run?.FCP?.toFixed(2) || '';
-            row[`Run ${i + 1} LCP`] = run?.LCP?.toFixed(2) || '';
+            row[`Run ${i + 1} FCP`] = run?.FCP != null ? run.FCP.toFixed(2) : '';
+            row[`Run ${i + 1} LCP`] = run?.LCP != null ? run.LCP.toFixed(2) : '';
+            row[`Run ${i + 1} TBT`] = run?.TBT != null ? run.TBT.toFixed(2) : '';
+            row[`Run ${i + 1} Speed Index`] = run?.speedIndex != null ? run.speedIndex.toFixed(2) : '';
+            row[`Run ${i + 1} CLS`] = run?.CLS != null ? run.CLS.toFixed(3) : '';
+            row[`Run ${i + 1} Page Weight`] = run?.pageWeight != null ? (run.pageWeight / 1024).toFixed(2) : '';
         }
 
         return header.map(h => `"${(row[h] ?? '').toString().replace(/"/g, '""')}"`).join(',');
@@ -322,8 +338,12 @@ runTestBtn.addEventListener('click', async () => {
         metricsContainer.innerHTML = `
             <div class="metrics">
                 <p><strong>Mode:</strong> ${data.parameters.mode}</p>
-                <p><strong>Avg FCP:</strong> ${data.averageMetrics.FCP ? data.averageMetrics.FCP.toFixed(2) + ' ms' : 'N/A'}</p>
-                <p><strong>Avg LCP:</strong> ${data.averageMetrics.LCP ? data.averageMetrics.LCP.toFixed(2) + ' ms' : 'N/A'}</p>
+                <p><strong>Avg FCP:</strong> ${data.averageMetrics.FCP != null ? data.averageMetrics.FCP.toFixed(2) + ' ms' : 'N/A'}</p>
+                <p><strong>Avg LCP:</strong> ${data.averageMetrics.LCP != null ? data.averageMetrics.LCP.toFixed(2) + ' ms' : 'N/A'}</p>
+                <p><strong>Avg TBT:</strong> ${data.averageMetrics.TBT != null ? data.averageMetrics.TBT.toFixed(2) + ' ms' : 'N/A'}</p>
+                <p><strong>Avg Speed Index:</strong> ${data.averageMetrics.speedIndex != null ? data.averageMetrics.speedIndex.toFixed(2) + ' ms' : 'N/A'}</p>
+                <p><strong>Avg CLS:</strong> ${data.averageMetrics.CLS != null ? data.averageMetrics.CLS.toFixed(3) : 'N/A'}</p>
+                <p><strong>Avg Page Weight:</strong> ${data.averageMetrics.pageWeight != null ? (data.averageMetrics.pageWeight / 1024).toFixed(2) + ' KB' : 'N/A'}</p>
                 <p><small>${runsDetails}</small></p>
             </div>
         `;

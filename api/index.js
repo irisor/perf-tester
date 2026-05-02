@@ -80,7 +80,9 @@ app.use(express.json({ limit: '10mb' }));
  */
 async function runSingleTest(browser, { url, rules, mode, disableCache }) {
     const page = await browser.newPage();
+    const traceFile = require('path').join(require('os').tmpdir(), `trace-${Date.now()}-${Math.random().toString(36).substring(7)}.json`);
     try {
+        await page.tracing.start({ path: traceFile, screenshots: true });
         page.on('console', msg => console.log(`[BROWSER]: ${msg.text()}`));
 
         // Apply PageSpeed settings if requested
@@ -148,8 +150,12 @@ async function runSingleTest(browser, { url, rules, mode, disableCache }) {
             })
         ]);
 
-        await page.goto(url, { waitUntil: 'load', timeout: 60000 });
-        console.log('[DEBUG] Page "load" event fired.');
+        try {
+            await page.goto(url, { waitUntil: 'load', timeout: 90000 });
+            console.log('[DEBUG] Page "load" event fired.');
+        } catch (e) {
+            console.log('[DEBUG] Page goto warning:', e.message);
+        }
 
         console.log('[DEBUG] Waiting 2 seconds for page to settle and LCP to finalize...');
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -158,8 +164,35 @@ async function runSingleTest(browser, { url, rules, mode, disableCache }) {
         const fcp = await fcpMetricPromise;
         const lcp = await page.evaluate(() => window.__getFinalLcp());
 
-        return { FCP: fcp, LCP: lcp };
+        const additionalMetrics = await page.evaluate((fcpVal) => {
+            if (window.__getAdditionalMetrics) {
+                return window.__getAdditionalMetrics(fcpVal || 0);
+            }
+            return { TBT: null, CLS: null, pageWeight: null };
+        }, fcp);
+
+        await page.tracing.stop();
+        
+        let speedIndex = null;
+        try {
+            const speedline = require('speedline');
+            const result = await speedline(traceFile, { include: 'speedIndex' });
+            speedIndex = result.speedIndex;
+        } catch (e) {
+            console.error('Speedline error:', e);
+        }
+
+        return { 
+            FCP: fcp, 
+            LCP: lcp,
+            TBT: additionalMetrics.TBT,
+            CLS: additionalMetrics.CLS,
+            pageWeight: additionalMetrics.pageWeight,
+            speedIndex: speedIndex
+        };
     } finally {
+        const fs = require('fs');
+        if (fs.existsSync(traceFile)) fs.unlinkSync(traceFile);
         await page.close();
     }
 }
@@ -266,6 +299,10 @@ app.post('/test', async (req, res) => {
                 // Calculate median values, which are more robust against outliers than averages.
                 const fcpValues = allMetrics.map(m => m.FCP).filter(v => v != null).sort((a, b) => a - b);
                 const lcpValues = allMetrics.map(m => m.LCP).filter(v => v != null).sort((a, b) => a - b);
+                const tbtValues = allMetrics.map(m => m.TBT).filter(v => v != null).sort((a, b) => a - b);
+                const clsValues = allMetrics.map(m => m.CLS).filter(v => v != null).sort((a, b) => a - b);
+                const pageWeightValues = allMetrics.map(m => m.pageWeight).filter(v => v != null).sort((a, b) => a - b);
+                const speedIndexValues = allMetrics.map(m => m.speedIndex).filter(v => v != null).sort((a, b) => a - b);
 
                 const getMedian = (arr) => {
                     if (arr.length === 0) return null;
@@ -276,6 +313,10 @@ app.post('/test', async (req, res) => {
                 const medianMetrics = {
                     FCP: getMedian(fcpValues),
                     LCP: getMedian(lcpValues),
+                    TBT: getMedian(tbtValues),
+                    CLS: getMedian(clsValues),
+                    pageWeight: getMedian(pageWeightValues),
+                    speedIndex: getMedian(speedIndexValues)
                 };
 
                 console.log('[SERVER]: Final median metrics:', medianMetrics);
@@ -292,13 +333,13 @@ app.post('/test', async (req, res) => {
                 // The frontend expects a specific structure. Let's build it.
                 return {
                     parameters: { url, rules, mode, disableCache },
-                    averageMetrics: { FCP: medianMetrics.FCP, LCP: medianMetrics.LCP },
+                    averageMetrics: medianMetrics,
                     individualRuns: allMetrics,
                     screenshot
                 };
             })(),
             new Promise((_, reject) =>
-                setTimeout(() => reject(new Error(`Global test timeout: The test took too long to complete (${runs * 90}s).`)), runs * 90000)
+                setTimeout(() => reject(new Error(`Global test timeout: The test took too long to complete (${runs * 120}s).`)), runs * 120000)
             )
         ]);
         res.json(result);
@@ -374,6 +415,70 @@ async function injectPerformanceObservers(page) {
             console.log(`[PERF OBSERVER]: Reporting final LCP: ${finalLcp}ms (total updates: ${window.__lcpUpdates.length})`);
             console.log(`[PERF OBSERVER]: All LCP updates:`, JSON.stringify(window.__lcpUpdates, null, 2));
             return finalLcp;
+        };
+
+        window.__longTasks = [];
+        try {
+            new PerformanceObserver((list) => {
+                for (const entry of list.getEntries()) {
+                    window.__longTasks.push({startTime: entry.startTime, duration: entry.duration});
+                }
+            }).observe({type: 'longtask', buffered: true});
+        } catch (e) {
+            console.error('[PERF OBSERVER]: longtask not supported');
+        }
+
+        window.__layoutShifts = [];
+        try {
+            new PerformanceObserver((list) => {
+                for (const entry of list.getEntries()) {
+                    if (!entry.hadRecentInput) {
+                        window.__layoutShifts.push(entry.value);
+                    }
+                }
+            }).observe({type: 'layout-shift', buffered: true});
+        } catch (e) {
+            console.error('[PERF OBSERVER]: layout-shift not supported');
+        }
+
+        window.__resources = [];
+        try {
+            new PerformanceObserver((list) => {
+                for (const entry of list.getEntries()) {
+                    window.__resources.push(entry.transferSize || 0);
+                }
+            }).observe({type: 'resource', buffered: true});
+        } catch (e) {
+            console.error('[PERF OBSERVER]: resource not supported');
+        }
+
+        window.__getAdditionalMetrics = (fcpTime) => {
+            let tbt = 0;
+            for (const task of window.__longTasks) {
+                if (task.startTime >= fcpTime) {
+                    tbt += Math.max(0, task.duration - 50);
+                }
+            }
+            
+            let cls = 0;
+            for (const val of window.__layoutShifts) {
+                cls += val;
+            }
+            
+            let totalBytes = 0;
+            const navEntries = performance.getEntriesByType('navigation');
+            if (navEntries.length > 0) {
+                totalBytes += navEntries[0].transferSize || 0;
+            }
+            for (const size of window.__resources) {
+                totalBytes += size;
+            }
+            
+            return {
+                TBT: tbt,
+                CLS: cls,
+                pageWeight: totalBytes
+            };
         };
     });
 }
