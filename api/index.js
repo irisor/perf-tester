@@ -172,7 +172,7 @@ app.post('/test', async (req, res) => {
     // This tells @sparticuz/chromium to use the Amazon Linux 2023 compatible binaries
     process.env.AWS_LAMBDA_JS_RUNTIME = 'nodejs22.x';
     const puppeteer = require('puppeteer-core');
-    const chromium = require('@sparticuz/chromium');
+    const chromium = require('@sparticuz/chromium-min');
 
     const { url, rules = {}, mode = 'custom', runs = 3, disableCache = false, dryRun = false } = req.body; // Add 'dryRun' parameter
 
@@ -235,7 +235,9 @@ app.post('/test', async (req, res) => {
                     await chromium.font('https://fonts.gstatic.com/s/roboto/v27/KFOmCnqEu92Fr1Mu4mxK.woff2');
                     console.log('[DEBUG] After calling chromium.font()');
                     
-                    executablePath = await chromium.executablePath();
+                    // On Vercel, download the Chromium pack at runtime to bypass the 50MB deployment limit
+                    const packUrl = 'https://github.com/Sparticuz/chromium/releases/download/v131.0.1/chromium-v131.0.1-pack.tar';
+                    executablePath = await chromium.executablePath(packUrl);
                     // Fix for Vercel Node 20 (Amazon Linux 2023) missing libnss3.so
                     if (executablePath.includes('/tmp/')) {
                         process.env.LD_LIBRARY_PATH = executablePath.substring(0, executablePath.lastIndexOf('/'));
