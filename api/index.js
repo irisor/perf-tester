@@ -238,10 +238,6 @@ app.post('/test', async (req, res) => {
                     // On Vercel, download the Chromium pack at runtime to bypass the 50MB deployment limit
                     const packUrl = 'https://github.com/Sparticuz/chromium/releases/download/v131.0.1/chromium-v131.0.1-pack.tar';
                     executablePath = await chromium.executablePath(packUrl);
-                    // Fix for Vercel Node 20 (Amazon Linux 2023) missing libnss3.so
-                    if (executablePath.includes('/tmp/')) {
-                        process.env.LD_LIBRARY_PATH = executablePath.substring(0, executablePath.lastIndexOf('/'));
-                    }
                 }
 
                 const launchOptions = {
